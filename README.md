@@ -1,1 +1,1 @@
-# RAG-Document-Assistant
+# LOCAL RAG DOCUMENT ASSISTANT

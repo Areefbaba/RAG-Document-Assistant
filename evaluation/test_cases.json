@@ -1,0 +1,26 @@
+[
+  {
+    "question": "What is bias?",
+    "expected_source": "pdf"
+  },
+  {
+    "question": "What is variance?",
+    "expected_source": "pdf"
+  },
+  {
+    "question": "What is the bias-variance trade-off?",
+    "expected_source": "pdf"
+  },
+  {
+    "question": "What is PCA?",
+    "expected_source": "pdf"
+  },
+  {
+    "question": "What is the capital of France?",
+    "expected_source": "web"
+  },
+  {
+    "question": "What is the latest version of Python?",
+    "expected_source": "web"
+  }
+]

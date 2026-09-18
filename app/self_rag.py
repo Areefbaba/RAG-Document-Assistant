@@ -4,19 +4,18 @@ import json
 import re
 from typing import Callable
 
-from langchain_core.documents import Document
+from langchain_ollama import ChatOllama
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_ollama import ChatOllama
 
 
-SELF_RAG_CRITIQUE_PROMPT = ChatPromptTemplate.from_messages(
+SUPPORT_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You are a strict answer verifier for a grounded RAG system.
+            """You are a strict RAG answer evaluator.
 
-Check whether the proposed answer is fully supported by the supplied context.
+Determine whether every important factual claim in the proposed answer is supported by the supplied context.
 
 Return JSON only:
 {"supported": true, "reason": "brief reason"}
@@ -25,7 +24,6 @@ or
 
 {"supported": false, "reason": "brief reason"}
 
-An answer is supported only when its factual claims can be directly supported by the supplied context.
 Do not use outside knowledge.
 """,
         ),
@@ -45,13 +43,44 @@ Proposed answer:
 )
 
 
-STRICT_REGEN_PROMPT = ChatPromptTemplate.from_messages(
+USEFULNESS_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are a strict answer-quality evaluator.
+
+Determine whether the proposed answer directly and usefully answers the user's question.
+
+Return JSON only:
+{"useful": true, "reason": "brief reason"}
+
+or
+
+{"useful": false, "reason": "brief reason"}
+
+An answer is not useful when it is evasive, incomplete, unrelated, or does not address the requested information.
+""",
+        ),
+        (
+            "human",
+            """Question:
+{question}
+
+Proposed answer:
+{answer}
+""",
+        ),
+    ]
+)
+
+
+REVISE_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
             """You are a grounded document question-answering assistant.
 
-Generate the answer using ONLY the supplied context.
+Correct the proposed answer using ONLY the supplied context.
 
 Rules:
 - Every factual claim must be supported by the context.
@@ -60,7 +89,7 @@ Rules:
 - If the context is insufficient, say:
 "I don't know based on the provided documents."
 - Keep the answer concise.
-- Cite sources as [filename, Page N].
+- Cite document claims as [filename, Page N].
 """,
         ),
         (
@@ -71,37 +100,133 @@ Rules:
 Context:
 {context}
 
-Previous answer:
+Proposed answer:
 {answer}
 
-Write a corrected answer that is fully grounded in the context.
+Write the corrected answer.
 """,
         ),
     ]
 )
 
 
-def _parse_critique(text: str) -> tuple[bool, str]:
+REWRITE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """Rewrite the user's question into a clearer retrieval query.
+
+Preserve the user's intent.
+Do not answer the question.
+Return only the rewritten question.
+""",
+        ),
+        ("human", "{question}"),
+    ]
+)
+
+
+def _parse_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
 
-    if match:
-        try:
-            payload = json.loads(match.group(0))
-            supported = bool(payload.get("supported", False))
-            reason = str(payload.get("reason", ""))
-            return supported, reason
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
+    if not match:
+        return {}
 
-    lowered = text.lower()
+    try:
+        value = json.loads(match.group(0))
+        return value if isinstance(value, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
 
-    if '"supported": false' in lowered or '"supported":false' in lowered:
-        return False, text.strip()
 
-    if '"supported": true' in lowered or '"supported":true' in lowered:
-        return True, text.strip()
+def check_answer_support(
+    question: str,
+    answer: str,
+    context: str,
+    llm: ChatOllama,
+) -> tuple[bool, str]:
+    response = (
+        SUPPORT_PROMPT
+        | llm
+        | StrOutputParser()
+    ).invoke(
+        {
+            "question": question,
+            "answer": answer,
+            "context": context,
+        }
+    )
 
-    return True, "Critique could not be parsed; keeping the grounded answer."
+    payload = _parse_json(response)
+
+    if "supported" in payload:
+        return bool(payload["supported"]), str(
+            payload.get("reason", "")
+        )
+
+    return True, "Support evaluation could not be parsed."
+
+
+def check_answer_useful(
+    question: str,
+    answer: str,
+    llm: ChatOllama,
+) -> tuple[bool, str]:
+    response = (
+        USEFULNESS_PROMPT
+        | llm
+        | StrOutputParser()
+    ).invoke(
+        {
+            "question": question,
+            "answer": answer,
+        }
+    )
+
+    payload = _parse_json(response)
+
+    if "useful" in payload:
+        return bool(payload["useful"]), str(
+            payload.get("reason", "")
+        )
+
+    return bool(answer.strip()), "Usefulness evaluation could not be parsed."
+
+
+def revise_answer(
+    question: str,
+    answer: str,
+    context: str,
+    llm: ChatOllama,
+) -> str:
+    return (
+        REVISE_PROMPT
+        | llm
+        | StrOutputParser()
+    ).invoke(
+        {
+            "question": question,
+            "answer": answer,
+            "context": context,
+        }
+    ).strip()
+
+
+def rewrite_question(
+    question: str,
+    llm: ChatOllama,
+) -> str:
+    rewritten = (
+        REWRITE_PROMPT
+        | llm
+        | StrOutputParser()
+    ).invoke(
+        {
+            "question": question,
+        }
+    ).strip()
+
+    return rewritten or question
 
 
 def self_reflect_and_correct(
@@ -112,43 +237,30 @@ def self_reflect_and_correct(
     max_retries: int = 1,
     status_callback: Callable[[str], None] | None = None,
 ) -> str:
-    if not answer.strip():
-        return answer
+    current_answer = answer
 
     for attempt in range(max_retries + 1):
         if status_callback:
-            status_callback("self_reflect")
+            status_callback("is_sup")
 
-        critique_response = (
-            SELF_RAG_CRITIQUE_PROMPT
-            | llm
-            | StrOutputParser()
-        ).invoke(
-            {
-                "question": question,
-                "context": context,
-                "answer": answer,
-            }
+        supported, _ = check_answer_support(
+            question,
+            current_answer,
+            context,
+            llm,
         )
 
-        supported, _ = _parse_critique(critique_response)
-
         if supported or attempt >= max_retries:
-            return answer
+            return current_answer
 
         if status_callback:
-            status_callback("self_retry")
+            status_callback("revise_answer")
 
-        answer = (
-            STRICT_REGEN_PROMPT
-            | llm
-            | StrOutputParser()
-        ).invoke(
-            {
-                "question": question,
-                "context": context,
-                "answer": answer,
-            }
-        ).strip()
+        current_answer = revise_answer(
+            question,
+            current_answer,
+            context,
+            llm,
+        )
 
-    return answer
+    return current_answer

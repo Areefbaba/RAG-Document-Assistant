@@ -1,4 +1,8 @@
 streamlit
+fastapi
+uvicorn
+python-multipart
+requests
 langchain
 langchain-community
 langchain-text-splitters
@@ -9,3 +13,4 @@ pypdf
 sentence-transformers
 torch
 ddgs
+pytest

@@ -17,7 +17,39 @@ st.set_page_config(
 )
 
 st.title("RAG Document Assistant")
-st.caption("Intelligent Document Q&A with Grounded RAG and Web Fallback")
+st.caption("Intelligent Document Q&A with Grounded RAG, Self-RAG, CRAG and Web Fallback")
+
+st.markdown(
+    """
+    <style>
+    .rag-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 15px;
+        font-weight: 600;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(128, 128, 128, 0.12);
+        margin-bottom: 8px;
+    }
+
+    .rag-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        animation: rag-blink 0.9s infinite;
+    }
+
+    @keyframes rag-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.2; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 if "files" not in st.session_state:
@@ -42,23 +74,26 @@ def check_api() -> bool:
 
 
 def upload_documents(uploaded_files) -> dict:
-    payload = [
-        (
-            "files",
+    payload = []
+
+    for uploaded_file in uploaded_files:
+        payload.append(
             (
-                uploaded_file.name,
-                uploaded_file.getvalue(),
-                "application/pdf",
-            ),
+                "files",
+                (
+                    uploaded_file.name,
+                    uploaded_file.getvalue(),
+                    "application/pdf",
+                ),
+            )
         )
-        for uploaded_file in uploaded_files
-    ]
 
     response = requests.post(
         f"{API_URL}/documents/upload",
         files=payload,
         timeout=300,
     )
+
     response.raise_for_status()
     return response.json()
 
@@ -69,6 +104,7 @@ def ask_question(question: str) -> dict:
         json={"question": question},
         timeout=300,
     )
+
     response.raise_for_status()
     return response.json()
 
@@ -86,6 +122,7 @@ with st.sidebar:
     st.caption(f"API: {API_URL}")
 
     st.divider()
+
     st.header("Document Upload")
 
     uploaded_files = st.file_uploader(
@@ -101,9 +138,7 @@ with st.sidebar:
     )
 
     if uploaded_files:
-        st.write(
-            f"{len(uploaded_files)} PDF(s) selected"
-        )
+        st.write(f"{len(uploaded_files)} PDF(s) selected")
 
     if process_button:
         if not uploaded_files:
@@ -115,7 +150,9 @@ with st.sidebar:
                 with st.spinner(
                     "Processing documents through FastAPI..."
                 ):
-                    result = upload_documents(uploaded_files)
+                    result = upload_documents(
+                        uploaded_files
+                    )
 
                 st.session_state.files = result.get(
                     "files",
@@ -128,28 +165,11 @@ with st.sidebar:
                     f"into {result.get('chunks', 0)} chunks."
                 )
 
-            except requests.HTTPError as exc:
-                try:
-                    detail = exc.response.json().get(
-                        "detail",
-                        str(exc),
-                    )
-                except Exception:
-                    detail = str(exc)
-
-                st.error(
-                    f"API error: {detail}"
-                )
-
-            except requests.RequestException:
-                st.error(
-                    "Could not connect to the FastAPI backend."
-                )
+            except requests.RequestException as exc:
+                st.error(f"Document upload failed: {exc}")
 
             except Exception as exc:
-                st.error(
-                    f"Something went wrong: {exc}"
-                )
+                st.error(f"Something went wrong: {exc}")
 
     if st.session_state.files:
         st.divider()
@@ -157,6 +177,10 @@ with st.sidebar:
 
         for filename in st.session_state.files:
             st.write(f"📄 {filename}")
+
+        st.caption(
+            "RAG engine: FAISS + MMR + Self-RAG + CRAG"
+        )
 
 
 if not st.session_state.files:
@@ -175,10 +199,38 @@ else:
             if message.get("source_type") == "pdf":
                 st.caption("📄 Source: Uploaded PDF")
 
-                documents = message.get(
-                    "documents",
-                    [],
-                )
+                for document in message.get("documents", []):
+                    st.write(
+                        f"**{document['file']}** "
+                        f"— Page {document['page']}"
+                    )
+
+            elif message.get("source_type") == "web":
+                st.caption("🌐 Source: Web Search")
+
+                web_sources = message.get("web_sources", [])
+
+                if web_sources:
+                    with st.expander("View Web Sources"):
+                        for source in web_sources:
+                            title = source.get(
+                                "title",
+                                "Web source",
+                            )
+                            url = source.get("url", "")
+
+                            if url:
+                                st.markdown(
+                                    f"- [{title}]({url})"
+                                )
+                            else:
+                                st.write(f"- {title}")
+
+            elif message.get("source_type") == "hybrid":
+                st.caption("🔀 Source: PDF + Web")
+
+                documents = message.get("documents", [])
+                web_sources = message.get("web_sources", [])
 
                 if documents:
                     with st.expander("View PDF Sources"):
@@ -188,14 +240,6 @@ else:
                                 f"— Page {document['page']}"
                             )
 
-            elif message.get("source_type") == "web":
-                st.caption("🌐 Source: Web Search")
-
-                web_sources = message.get(
-                    "web_sources",
-                    [],
-                )
-
                 if web_sources:
                     with st.expander("View Web Sources"):
                         for source in web_sources:
@@ -203,10 +247,7 @@ else:
                                 "title",
                                 "Web source",
                             )
-                            url = source.get(
-                                "url",
-                                "",
-                            )
+                            url = source.get("url", "")
 
                             if url:
                                 st.markdown(
@@ -214,6 +255,9 @@ else:
                                 )
                             else:
                                 st.write(f"- {title}")
+
+            elif message.get("source_type") == "direct":
+                st.caption("💬 Direct Response")
 
     question = st.chat_input(
         "Ask something about your documents..."
@@ -233,29 +277,26 @@ else:
         with st.chat_message("assistant"):
             status_box = st.empty()
 
+            status_messages = {
+                "decide_retrieval": "🧭 Deciding whether retrieval is needed...",
+                "retrieve": "📄 Retrieving relevant document context...",
+                "is_relevant": "🧠 Evaluating retrieval relevance...",
+                "generate_from_context": "🤖 Generating an answer from context...",
+                "is_sup": "🪞 Checking whether the answer is supported...",
+                "revise_answer": "♻️ Revising the answer for better grounding...",
+                "is_use": "✅ Checking whether the answer is useful...",
+                "rewrite_question": "✏️ Rewriting the question for better retrieval...",
+                "crag_correct": "🔎 Correcting retrieval with web search...",
+                "no_answer_found": "🌐 Searching the web for an answer...",
+                "generate_direct": "💬 Preparing a direct response...",
+            }
+
             status_box.markdown(
-                """
-                <div style="display:inline-flex;align-items:center;gap:8px;
-                font-size:15px;font-weight:600;padding:8px 12px;
-                border-radius:8px;background:rgba(128,128,128,0.12);">
+                f"""
+                <div class="rag-status">
                     <span class="rag-dot"></span>
-                    Checking documents and searching the web if needed...
+                    {status_messages["decide_retrieval"]}
                 </div>
-
-                <style>
-                .rag-dot {
-                    width:8px;
-                    height:8px;
-                    border-radius:50%;
-                    background:currentColor;
-                    animation:rag-blink 0.9s infinite;
-                }
-
-                @keyframes rag-blink {
-                    0%, 100% { opacity:1; }
-                    50% { opacity:0.2; }
-                }
-                </style>
                 """,
                 unsafe_allow_html=True,
             )
@@ -269,17 +310,18 @@ else:
                     "answer",
                     "No answer was returned.",
                 )
-                source_type = result.get(
-                    "source_type"
-                )
+                source_type = result.get("source_type")
 
                 st.markdown(answer)
 
                 if source_type == "pdf":
                     st.caption("📄 Source: Uploaded PDF")
-
                 elif source_type == "web":
                     st.caption("🌐 Source: Web Search")
+                elif source_type == "hybrid":
+                    st.caption("🔀 Source: PDF + Web")
+                elif source_type == "direct":
+                    st.caption("💬 Direct Response")
 
                 st.session_state.messages.append(
                     {
@@ -308,9 +350,7 @@ else:
                 except Exception:
                     detail = str(exc)
 
-                st.error(
-                    f"API error: {detail}"
-                )
+                st.error(f"API error: {detail}")
 
             except requests.RequestException:
                 status_box.empty()
@@ -322,7 +362,4 @@ else:
 
             except Exception as exc:
                 status_box.empty()
-
-                st.error(
-                    f"Something went wrong: {exc}"
-                )
+                st.error(f"Something went wrong: {exc}")

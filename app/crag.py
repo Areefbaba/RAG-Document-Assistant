@@ -35,17 +35,12 @@ def evaluate_retrieval(
     scores = [score for _, score in results]
     best_score = min(scores)
 
-    # Practical CRAG-style routing using the existing FAISS distance.
-    # The original CRAG paper uses a learned retrieval evaluator; this
-    # implementation uses calibrated FAISS confidence bands instead.
     high_confidence = threshold * 0.75
 
     if best_score <= high_confidence:
         status = "high"
-
     elif best_score <= threshold:
         status = "medium"
-
     else:
         status = "low"
 
@@ -59,4 +54,4 @@ def evaluate_retrieval(
 def web_correction_needed(
     evaluation: RetrievalEvaluation,
 ) -> bool:
-    return evaluation.status in {"medium", "low"}
+    return evaluation.status == "medium"

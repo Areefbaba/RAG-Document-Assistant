@@ -69,22 +69,6 @@ PDF Processing → Cleaning → Chunking → Embeddings → FAISS
                                                  Retrieval
 ```
 
-## Core Technologies
-
-- Python
-- LangChain
-- LangGraph
-- FAISS
-- Hugging Face Sentence Transformers
-- Qwen3
-- Ollama
-- FastAPI
-- Streamlit
-- PyPDF
-- DDGS Web Search
-- Pydantic
-- Pytest
-
 ## Project Structure
 
 ```text
@@ -300,9 +284,3 @@ streamlit run app/app.py
 - Authentication and multi-user document isolation
 - Background document processing
 - Production monitoring and observability
-
-## Summary
-
-RAG Document Assistant combines document retrieval, semantic search, local LLM generation, retrieval-quality routing, answer verification, and corrective workflows into a modular AI application.
-
-The project demonstrates practical implementation of modern RAG and AI engineering concepts using LangChain, LangGraph, FAISS, FastAPI, Streamlit, and local LLM inference.

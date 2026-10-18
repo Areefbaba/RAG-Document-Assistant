@@ -7,7 +7,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.rag_pipeline import (
+from app import (
     DEFAULT_LLM,
     answer_question,
     build_vector_store,

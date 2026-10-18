@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 
 
 def clean_text(text: str) -> str:
+    """Clean and normalize extracted raw text from PDF documents."""
     text = text.replace("\x00", " ").replace("\xa0", " ")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -16,10 +17,13 @@ def clean_text(text: str) -> str:
 
 
 def load_pdfs(paths: Iterable[str | Path]) -> list[Document]:
+    """Load and preprocess multiple PDF documents."""
     documents = []
 
     for path in paths:
         path = Path(path)
+        if not path.is_file():
+            continue
 
         pages = PyPDFLoader(
             str(path),

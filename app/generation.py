@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import Callable
 
+from dotenv import load_dotenv
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -14,7 +16,9 @@ from app.self_rag import (
     revise_answer as revise_grounded_answer,
 )
 
-DEFAULT_LLM = "qwen3:4b"
+load_dotenv()
+
+DEFAULT_LLM = os.getenv("DEFAULT_LLM", "qwen3:4b")
 
 PDF_PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -63,12 +67,78 @@ Rules:
 )
 
 
-@lru_cache(maxsize=4)
-def create_llm(llm_name: str = DEFAULT_LLM) -> ChatOllama:
-    return ChatOllama(
-        model=llm_name,
-        temperature=0.1,
-    )
+@lru_cache(maxsize=8)
+def create_llm(llm_name: str = DEFAULT_LLM):
+    """Instantiate chat model supporting Ollama, OpenAI, Groq, Anthropic, or Gemini based on .env keys."""
+    load_dotenv()
+    llm_lower = llm_name.lower()
+
+    # 1. OpenAI
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key and (llm_lower.startswith(("gpt-", "o1-", "o3-", "chatgpt")) or "openai" in llm_lower):
+        try:
+            from langchain_openai import ChatOpenAI
+
+            return ChatOpenAI(
+                model=llm_name,
+                temperature=0.1,
+                api_key=openai_key,
+            )
+        except Exception:
+            pass
+
+    # 2. Groq
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key and ("groq" in llm_lower or llm_lower.startswith(("llama-", "mixtral-", "gemma-"))):
+        try:
+            from langchain_groq import ChatGroq
+
+            return ChatGroq(
+                model=llm_name,
+                temperature=0.1,
+                api_key=groq_key,
+            )
+        except Exception:
+            pass
+
+    # 3. Anthropic
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if anthropic_key and "claude" in llm_lower:
+        try:
+            from langchain_anthropic import ChatAnthropic
+
+            return ChatAnthropic(
+                model=llm_name,
+                temperature=0.1,
+                api_key=anthropic_key,
+            )
+        except Exception:
+            pass
+
+    # 4. Google Gemini
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if gemini_key and "gemini" in llm_lower:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+
+            return ChatGoogleGenerativeAI(
+                model=llm_name,
+                temperature=0.1,
+                google_api_key=gemini_key,
+            )
+        except Exception:
+            pass
+
+    # 5. Default to local Ollama
+    ollama_base_url = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST")
+    kwargs = {
+        "model": llm_name,
+        "temperature": 0.1,
+    }
+    if ollama_base_url:
+        kwargs["base_url"] = ollama_base_url
+
+    return ChatOllama(**kwargs)
 
 
 def generate_grounded_answer(
@@ -93,6 +163,68 @@ def web_search(
     question: str,
     max_results: int = 5,
 ) -> list[dict]:
+    """Perform live web search using Tavily (if TAVILY_API_KEY is present) or DuckDuckGo fallback."""
+    load_dotenv()
+    tavily_key = os.getenv("TAVILY_API_KEY")
+
+    # 1. Attempt Tavily Search if API key is provided
+    if tavily_key:
+        try:
+            from tavily import TavilyClient
+
+            client = TavilyClient(api_key=tavily_key)
+            response = client.search(
+                query=question,
+                max_results=max_results,
+                search_depth="basic",
+            )
+            results = []
+            for item in response.get("results", []):
+                snippet = item.get("content", "").strip()
+                if snippet:
+                    results.append(
+                        {
+                            "title": item.get("title", "").strip(),
+                            "url": item.get("url", "").strip(),
+                            "snippet": snippet,
+                        }
+                    )
+            if results:
+                return results
+        except Exception:
+            # Fall back to Tavily REST API via requests
+            try:
+                import requests
+
+                resp = requests.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": tavily_key,
+                        "query": question,
+                        "max_results": max_results,
+                        "search_depth": "basic",
+                    },
+                    timeout=10,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    results = []
+                    for item in data.get("results", []):
+                        snippet = item.get("content", "").strip()
+                        if snippet:
+                            results.append(
+                                {
+                                    "title": item.get("title", "").strip(),
+                                    "url": item.get("url", "").strip(),
+                                    "snippet": snippet,
+                                }
+                            )
+                    if results:
+                        return results
+            except Exception:
+                pass
+
+    # 2. Fall back to DuckDuckGo search (free, no API key required)
     try:
         from ddgs import DDGS
     except ImportError:
@@ -113,9 +245,9 @@ def web_search(
             for result in search_results:
                 results.append(
                     {
-                        "title": result.get("title", ""),
-                        "url": result.get("href", ""),
-                        "snippet": result.get("body", ""),
+                        "title": result.get("title", "").strip(),
+                        "url": result.get("href", "").strip(),
+                        "snippet": result.get("body", "").strip(),
                     }
                 )
 
